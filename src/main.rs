@@ -53,6 +53,7 @@ fn main() {
   let mut reachable_bundles = HashSet::new();
   let mut bundle_graph = Graph::new();
 
+  // Step 1: Create bundles at the explicit split points in the graph.
   // Create bundles for each entry.
   for entry in &entries {
     let bundle_id = bundle_graph.add_node(Bundle::from_asset(*entry, &g[*entry]));
@@ -119,7 +120,7 @@ fn main() {
   println!("reachable {:?}", reachable_bundles);
   println!("initial bundle graph {:?}", Dot::new(&bundle_graph));
 
-  // Determine reachability for every asset from each bundle root.
+  // Step 2: Determine reachability for every asset from each bundle root.
   // This is later used to determine which bundles to place each asset in.
   let mut reachable_nodes = HashSet::new();
   for (root, _) in &bundle_roots {
@@ -142,6 +143,10 @@ fn main() {
 
   let reachable_graph = Graph::<(), ()>::from_edges(&reachable_nodes);
   println!("{:?}", Dot::new(&reachable_graph));
+
+  // Step 3: Place all assets into bundles. Each asset is placed into a single
+  // bundle based on the bundle entries it is reachable from. This creates a
+  // maximally code split bundle graph with no duplication.
 
   // Create a mapping from entry asset ids to bundle ids.
   let mut bundles: HashMap<Vec<NodeIndex>, NodeIndex> = HashMap::new();
@@ -186,25 +191,17 @@ fn main() {
     }
   }
 
-  println!("{:?}", bundles);
-
-  // Remove shared bundles that are smaller than the minimum size,
-  // and add the assets to the original source bundles.
+  // Step 4: Remove shared bundles that are smaller than the minimum size,
+  // and add the assets to the original source bundles they were referenced from.
+  // This may result in duplication of assets in multiple bundles.
   for bundle_id in bundle_graph.node_indices() {
     let bundle = &bundle_graph[bundle_id];
     if bundle.source_bundles.len() > 0 && bundle.size < 10 {
-      let bundle = bundle_graph.remove_node(bundle_id).unwrap();
-      for asset_id in &bundle.asset_ids {
-        for source_bundle_id in &bundle.source_bundles {
-          let bundle = &mut bundle_graph[*source_bundle_id];
-          bundle.asset_ids.push(*asset_id);
-          bundle.size += g[*asset_id].size;
-        }
-      }
+      remove_bundle(&g, &mut bundle_graph, bundle_id);
     }
   }
 
-  // Remove shared bundles from bundle groups that hit the parallel request limit.
+  // Step 5: Remove shared bundles from bundle groups that hit the parallel request limit.
   let limit = 3;
   for (_, (bundle_id, bundle_group_id)) in bundle_roots {
     // Only handle bundle group entries.
@@ -221,11 +218,8 @@ fn main() {
       // Remove bundles until the bundle group is within the parallel request limit.
       for bundle_id in &neighbors[0..neighbors.len() - limit] {
         // Add all assets in the shared bundle into the source bundles that are within this bundle group.
-        for source in bundle_graph[*bundle_id].source_bundles.clone() {
-          if !neighbors.contains(&source) {
-            continue;
-          }
-
+        let source_bundles: Vec<NodeIndex> = bundle_graph[*bundle_id].source_bundles.drain_filter(|s| neighbors.contains(s)).collect();
+        for source in source_bundles {
           for asset_id in bundle_graph[*bundle_id].asset_ids.clone() {
             let bundle_id = bundles[&vec![source]];
             let bundle = &mut bundle_graph[bundle_id];
@@ -235,9 +229,14 @@ fn main() {
         }
 
         // Remove the edge from this bundle group to the shared bundle.
-        // If it becomes orphaned, remove the bundle entirely.
         bundle_graph.remove_edge(bundle_graph.find_edge(bundle_group_id, *bundle_id).unwrap());
-        if bundle_graph.neighbors_directed(*bundle_id, Incoming).count() == 0 {
+
+        // If there is now only a single bundle group that contains this bundle,
+        // merge it into the remaining source bundles. If it is orphaned entirely, remove it.
+        let count = bundle_graph.neighbors_directed(*bundle_id, Incoming).count();
+        if count == 1 {
+          remove_bundle(&g, &mut bundle_graph, *bundle_id);
+        } else if count == 0 {
           bundle_graph.remove_node(*bundle_id);
         }
       }
@@ -249,6 +248,21 @@ fn main() {
   for bundle_id in bundle_graph.node_indices() {
     let bundle = &bundle_graph[bundle_id];
     println!("{} {}", bundle.asset_ids.iter().map(|n| g[*n].name).collect::<Vec<&str>>().join(", "), bundle.size)
+  }
+}
+
+fn remove_bundle(
+  asset_graph: &Graph<Asset, Dependency>,
+  bundle_graph: &mut Graph<Bundle, i32>,
+  bundle_id: NodeIndex
+) {
+  let bundle = bundle_graph.remove_node(bundle_id).unwrap();
+  for asset_id in &bundle.asset_ids {
+    for source_bundle_id in &bundle.source_bundles {
+      let bundle = &mut bundle_graph[*source_bundle_id];
+      bundle.asset_ids.push(*asset_id);
+      bundle.size += asset_graph[*asset_id].size;
+    }
   }
 }
 
