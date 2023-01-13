@@ -78,7 +78,7 @@ fn main() {
         // Create a new bundle when the asset type changes.
         if asset_a.asset_type != asset_b.asset_type {
           let (_, bundle_group_id) = stack.front().unwrap();
-          let bundle_id = bundle_graph.add_node(Bundle::from_asset(v, &g[v]));
+          let bundle_id = bundle_graph.add_node(Bundle::from_asset(v, asset_b));
           bundle_roots.insert(v, (bundle_id, *bundle_group_id));
 
           // Add an edge from the bundle group entry to the new bundle.
@@ -90,7 +90,7 @@ fn main() {
         // Create a new bundle as well as a new bundle group if the dependency is async.
         let dependency = &g[g.find_edge(u, v).unwrap()];
         if dependency.is_async {
-          let bundle_id = bundle_graph.add_node(Bundle::from_asset(v, &g[v]));
+          let bundle_id = bundle_graph.add_node(Bundle::from_asset(v, asset_b));
           bundle_roots.insert(v, (bundle_id, bundle_id));
 
           // Walk up the stack until we hit a different asset type
